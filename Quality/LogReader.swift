@@ -19,6 +19,10 @@ class LogReader {
     let entryStream = PassthroughSubject<CMEntry, Never>()
     let activationStream = PassthroughSubject<TrackActivation, Never>()
     
+    private let titleRegex: NSRegularExpression
+    private let formatIDRegex: NSRegularExpression
+    private let bitDepthRegex: NSRegularExpression
+    private let sampleRateRegex: NSRegularExpression
     private var process: Process?
     private let dateFormatter: DateFormatter
     private var dataBuffer = Data()
@@ -29,6 +33,10 @@ class LogReader {
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         self.dateFormatter = dateFormatter
+        self.titleRegex = try! NSRegularExpression(pattern: #"^mediaFormatinfo '(.*)'\s*,"#)
+        self.formatIDRegex = try! NSRegularExpression(pattern: #"\bsdFormatID = ([^,]+)"#)
+        self.bitDepthRegex = try! NSRegularExpression(pattern: #"\bsdBitDepth = (\d+) bit"#)
+        self.sampleRateRegex = try! NSRegularExpression(pattern: #"\basbdSampleRate = (\d+(?:\.\d+)?) kHz"#)
     }
     
     func spawnProcessIfNeeded() {
@@ -153,43 +161,12 @@ class LogReader {
         guard let messageContentSubstring = line.firstSubstring(between: "[com.apple.Music:ampplay] play> cm>> " , and: .end) else { return nil }
         let message = String(messageContentSubstring)
         
-        let split = message.split(separator: ",")
-        var trackName: String?
-        var isLossless: Bool?
-        var bitDepth: Int?
-        var sampleRate: Int?
-        
-        for element in split {
-            
-            // <private> in default circumstances
-            if trackName == nil, element.hasPrefix("mediaFormatinfo") {
-                guard let substring = element.firstSubstring(between: "\'", and: "\'") else { continue }
-                trackName = String(substring)
-                continue
-            }
-            
-            // notes: there is a field that may be "lossless", "high res lossless" and "stereo (lossy)"
-            
-            if isLossless == nil, element.hasPrefix(" sdFormatID") {
-                guard let substring = element.firstSubstring(between: "= ", and: .end) else { continue }
-                isLossless = substring == "alac"
-                continue
-            }
-            
-            if bitDepth == nil, element.hasPrefix(" sdBitDepth") {
-                guard let substring = element.firstSubstring(between: "= ", and: " bit") else { continue }
-                bitDepth = Int(substring)
-            }
-            
-            if sampleRate == nil, element.hasPrefix(" asbdSampleRate") {
-                guard let substring = element.firstSubstring(between: "= ", and: " kHz") else { continue }
-                let string = String(substring)
-                guard let double = Double(string) else { continue }
-                sampleRate = Int(double * 1000)
-                continue
-            }
-            
-        }
+        var trackName = firstCapture(in: message, regex: titleRegex)
+        let isLossless = firstCapture(in: message, regex: formatIDRegex) == "alac"
+        let bitDepth = firstCapture(in: message, regex: bitDepthRegex).flatMap(Int.init)
+        let sampleRate = firstCapture(in: message, regex: sampleRateRegex)
+            .flatMap(Double.init)
+            .map { Int($0 * 1000) }
         
         // this requires an external profile to read this info
         // might be helpful to prevent the early track sample rate switch issue.
@@ -198,9 +175,8 @@ class LogReader {
             trackName = nil
         }
         
-        guard let isLossless, let sampleRate else { return nil }
-        
         guard isLossless else { return nil }
+        guard let sampleRate else { return nil }
         
         return CMEntry(date: date, trackName: trackName, bitDepth: bitDepth, sampleRate: sampleRate)
     }
@@ -218,5 +194,16 @@ class LogReader {
     private func parseDate(from line: String) -> Date? {
         guard let dateSubstring = line.firstSubstring(between: .start, and: " Df ") else { return nil }
         return dateFormatter.date(from: String(dateSubstring))
+    }
+    
+    private func firstCapture(in text: String, regex: NSRegularExpression) -> String? {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+        return String(text[captureRange])
     }
 }

@@ -198,9 +198,30 @@ final class LocalFileFormatResolver {
 
 func normalizedTrackField(_ value: String?) -> String? {
     guard let value else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedPunctuation = value
+        .replacingOccurrences(of: "\u{2018}", with: "'")
+        .replacingOccurrences(of: "\u{2019}", with: "'")
+        .replacingOccurrences(of: "\u{201C}", with: "\"")
+        .replacingOccurrences(of: "\u{201D}", with: "\"")
+        .replacingOccurrences(of: "\u{2010}", with: "-")
+        .replacingOccurrences(of: "\u{2011}", with: "-")
+        .replacingOccurrences(of: "\u{2012}", with: "-")
+        .replacingOccurrences(of: "\u{2013}", with: "-")
+        .replacingOccurrences(of: "\u{2014}", with: "-")
+        .replacingOccurrences(of: "\u{2212}", with: "-")
+        .replacingOccurrences(of: "\u{2026}", with: "...")
+        .replacingOccurrences(of: "\u{00A0}", with: " ")
+        .replacingOccurrences(of: "\u{3000}", with: " ")
+    
+    let halfWidth = normalizedPunctuation.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? normalizedPunctuation
+    let collapsedWhitespace = halfWidth.replacingOccurrences(
+        of: #"\s+"#,
+        with: " ",
+        options: .regularExpression
+    )
+    let trimmed = collapsedWhitespace.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    return trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    return trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
 }
 
 private func blankToNil(_ value: String) -> String? {
