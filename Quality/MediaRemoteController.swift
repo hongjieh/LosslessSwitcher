@@ -16,11 +16,10 @@ class MediaRemoteController {
     
     private let controller: MediaController
     
-    init(outputDevices: OutputDevices) {
+        init(outputDevices: OutputDevices) {
         
         let controller = MediaController()
         self.controller = controller
-        controller.startListening()
         
         controller.onTrackInfoReceived = { [weak outputDevices] trackInfo in
             print("track \(trackInfo.payload.uniqueIdentifier) \(trackInfo.payload.title ?? "nil")")
@@ -29,6 +28,8 @@ class MediaRemoteController {
                 outputDevices.trackDidChange(trackInfo)
             }
         }
+        
+        controller.startListening()
         
     }
     

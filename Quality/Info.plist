@@ -4,6 +4,8 @@
 <dict>
 	<key>NSAppleScriptEnabled</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>LosslessSwitcher reads the currently playing track in Music to switch your output device format.</string>
 	<key>OSAScriptingDefinition</key>
 	<string>LosslessSwitcher.sdef</string>
 </dict>

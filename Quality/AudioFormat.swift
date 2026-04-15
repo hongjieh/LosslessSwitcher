@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AudioFormat {
+struct AudioFormat: Equatable {
     let sampleRate: Int
     let bitDepth: Int?
 }

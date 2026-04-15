@@ -9,12 +9,19 @@ import Foundation
 import Combine
 import Sweep
 
+struct TrackActivation {
+    let date: Date
+    let trackName: String
+}
+
 class LogReader {
     
     let entryStream = PassthroughSubject<CMEntry, Never>()
+    let activationStream = PassthroughSubject<TrackActivation, Never>()
     
     private var process: Process?
     private let dateFormatter: DateFormatter
+    private var dataBuffer = Data()
     
     init() {
         let dateFormatter = DateFormatter()
@@ -27,6 +34,47 @@ class LogReader {
     func spawnProcessIfNeeded() {
         guard process == nil else { return }
         self.spawnProcess()
+    }
+    
+    func recentEntries(withinLast seconds: Int) -> [CMEntry] {
+        recentLogLines(withinLast: seconds)
+            .compactMap { self.parseLine($0) }
+    }
+    
+    func recentActivations(withinLast seconds: Int) -> [TrackActivation] {
+        recentLogLines(withinLast: seconds)
+            .compactMap { self.parseActivation($0) }
+    }
+    
+    private func recentLogLines(withinLast seconds: Int) -> [String] {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/log")
+        process.arguments = [
+            "show",
+            "--last",
+            "\(seconds)s",
+            "--style",
+            "compact",
+            "--predicate",
+            "process = \"Music\" AND category=\"ampplay\""
+        ]
+        
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        
+        do {
+            try process.run()
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return [] }
+            return output
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map(String.init)
+        }
+        catch {
+            print("[LogReader recentLogLines] \(error)")
+            return []
+        }
     }
     
     private func spawnProcess() {
@@ -45,6 +93,9 @@ class LogReader {
         
         let pipe = Pipe()
         process.standardOutput = pipe
+        process.terminationHandler = { [weak self] _ in
+            self?.process = nil
+        }
         
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -53,8 +104,7 @@ class LogReader {
                 return
             }
             
-            guard let line = String(data: data, encoding: .utf8) else { return }
-            self?.processLine(line)
+            self?.append(data)
         }
         
         do {
@@ -65,13 +115,43 @@ class LogReader {
         }
     }
     
+    func stop() {
+        process?.terminate()
+        process = nil
+    }
+    
+    private func append(_ data: Data) {
+        dataBuffer.append(data)
+        let newline = Data([0x0A])
+        
+        while let range = dataBuffer.firstRange(of: newline) {
+            let lineData = dataBuffer.subdata(in: 0..<range.lowerBound)
+            dataBuffer.removeSubrange(0..<range.upperBound)
+            
+            guard let line = String(data: lineData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !line.isEmpty
+            else {
+                continue
+            }
+            
+            processLine(line)
+        }
+    }
+    
     private func processLine(_ line: String) {
-//        print("\n\nLINE: ", line)
-        guard let dateSubstring = line.firstSubstring(between: .start, and: " Df ") else { return }
-        guard let messageContentSubstring = line.firstSubstring(between: "[com.apple.Music:ampplay] play> cm>> " , and: .end) else { return }
-        let dateString = String(dateSubstring)
+        if let activation = parseActivation(line) {
+            activationStream.send(activation)
+        }
+        if let entry = parseLine(line) {
+            entryStream.send(entry)
+        }
+    }
+    
+    private func parseLine(_ line: String) -> CMEntry? {
+        guard let date = parseDate(from: line) else { return nil }
+        guard let messageContentSubstring = line.firstSubstring(between: "[com.apple.Music:ampplay] play> cm>> " , and: .end) else { return nil }
         let message = String(messageContentSubstring)
-        let date = dateFormatter.date(from: dateString)
         
         let split = message.split(separator: ",")
         var trackName: String?
@@ -118,18 +198,25 @@ class LogReader {
             trackName = nil
         }
         
-        guard let date, let isLossless, let sampleRate else { return }
+        guard let isLossless, let sampleRate else { return nil }
         
-        // discard if entry is known to be for lossy playback
-        // why?: while it could be nice to switch if you're playing a bunch of tracks where some are lossy,
-        //       occassionally, there are lossless tracks where logs start off with these lossy information.
-        //       to prevent over switching, i'm ignoring all lossy log entries.
-        guard isLossless else { return }
+        guard isLossless else { return nil }
         
-        let entry = CMEntry(date: date, trackName: trackName, bitDepth: bitDepth, sampleRate: sampleRate)
-//        print("\n\nXLINE", date, trackName, isLossless, bitDepth, sampleRate)
-//        print("\n\nLINE", date, split)
-        
-        entryStream.send(entry)
+        return CMEntry(date: date, trackName: trackName, bitDepth: bitDepth, sampleRate: sampleRate)
+    }
+    
+    private func parseActivation(_ line: String) -> TrackActivation? {
+        guard let date = parseDate(from: line) else { return nil }
+        guard let nameSubstring = line.firstSubstring(between: "_willBecomeActivePlayerItem ", and: .end) else { return nil }
+        let rawName = String(nameSubstring)
+        guard let titleStart = rawName.range(of: ") ")?.upperBound else { return nil }
+        let title = rawName[titleStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+        return TrackActivation(date: date, trackName: title)
+    }
+    
+    private func parseDate(from line: String) -> Date? {
+        guard let dateSubstring = line.firstSubstring(between: .start, and: " Df ") else { return nil }
+        return dateFormatter.date(from: String(dateSubstring))
     }
 }
