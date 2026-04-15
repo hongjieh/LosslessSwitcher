@@ -43,6 +43,8 @@ class OutputDevices: ObservableObject {
     private var isSwitchingFormat = false
     private var needsReapplyAfterSwitch = false
     private let maxSwitchVerificationRetries = 2
+    private let sameTrackBackwardRefinementLimit: TimeInterval = 5
+    private let sameTrackRestartThreshold: TimeInterval = 15
     
     private var previousSampleRate: Float64?
     private var previousBitDepth: Int?
@@ -286,25 +288,43 @@ class OutputDevices: ObservableObject {
     ) {
         NSLog("[Session] start title=%@ startedAt=%.3f history=%d", track.title ?? "nil", startedAt.timeIntervalSince1970, historyLookback)
         if let currentSession, sameTrackIdentity(currentSession.track, track) {
-            var updatedSession = currentSession
-            if startedAt < currentSession.startedAt.addingTimeInterval(-1) {
-                updatedSession.startedAt = startedAt
-                NSLog("[Session] refined title=%@ startedAt=%.3f", track.title ?? "nil", startedAt.timeIntervalSince1970)
+            let drift = startedAt.timeIntervalSince(currentSession.startedAt)
+            if drift < -sameTrackBackwardRefinementLimit {
+                NSLog(
+                    "[Session] ignored stale occurrence title=%@ drift=%.3f",
+                    track.title ?? "nil",
+                    drift
+                )
+                return
             }
-            if isRicher(track: track, than: currentSession.track) {
-                updatedSession.track = mergedTrack(currentSession.track, with: track)
-                currentTrack = updatedSession.track
-                NSLog("[Session] enriched title=%@", updatedSession.track.title ?? "nil")
+            if drift > sameTrackRestartThreshold {
+                NSLog(
+                    "[Session] restarting occurrence title=%@ drift=%.3f",
+                    track.title ?? "nil",
+                    drift
+                )
             }
-            self.currentSession = updatedSession
-            if updatedSession.appliedFormat == nil {
-                if resolveSnapshot {
-                    resolveCurrentTrackSnapshot(for: updatedSession.id, track: updatedSession.track, attempt: 0)
+            else {
+                var updatedSession = currentSession
+                if startedAt < currentSession.startedAt.addingTimeInterval(-1) {
+                    updatedSession.startedAt = startedAt
+                    NSLog("[Session] refined title=%@ startedAt=%.3f", track.title ?? "nil", startedAt.timeIntervalSince1970)
                 }
-                primeHistoryForSession(sessionID: updatedSession.id, historyLookback: historyLookback)
-                matchCurrentSessionFromBufferedEntries()
+                if isRicher(track: track, than: currentSession.track) {
+                    updatedSession.track = mergedTrack(currentSession.track, with: track)
+                    currentTrack = updatedSession.track
+                    NSLog("[Session] enriched title=%@", updatedSession.track.title ?? "nil")
+                }
+                self.currentSession = updatedSession
+                if updatedSession.appliedFormat == nil {
+                    if resolveSnapshot {
+                        resolveCurrentTrackSnapshot(for: updatedSession.id, track: updatedSession.track, attempt: 0)
+                    }
+                    primeHistoryForSession(sessionID: updatedSession.id, historyLookback: historyLookback)
+                    matchCurrentSessionFromBufferedEntries()
+                }
+                return
             }
-            return
         }
         
         previousTrack = currentTrack
