@@ -13,6 +13,11 @@ enum TrackResolutionSource: String {
     case logStream
 }
 
+enum LogMatchingMode: String {
+    case fallback
+    case profileBacked
+}
+
 struct MusicTrackSnapshot {
     let fetchedAt: Date
     let trackClassName: String?
@@ -60,6 +65,90 @@ struct PlaybackSession {
     var appliedFormat: AudioFormat?
     var appliedSource: TrackResolutionSource?
     var switchRetryCount = 0
+}
+
+final class LogPrivacyProfileDetector {
+    private static let knownProfileIdentifiers = [
+        "co.eclecticlight.profile.logprivate"
+    ]
+    
+    func detectMatchingMode() -> LogMatchingMode {
+        if hasKnownPrivateDataProfile() || hasPrivateDataLoggingPayload() {
+            return .profileBacked
+        }
+        return .fallback
+    }
+    
+    private func hasKnownPrivateDataProfile() -> Bool {
+        guard let output = runCommand(
+            executablePath: "/usr/bin/profiles",
+            arguments: ["list"]
+        ) else {
+            return false
+        }
+        
+        if Self.knownProfileIdentifiers.contains(where: output.contains) {
+            return true
+        }
+        
+        return output.localizedCaseInsensitiveContains("Enable Log Private Data")
+    }
+    
+    private func hasPrivateDataLoggingPayload() -> Bool {
+        guard let output = runCommand(
+            executablePath: "/usr/sbin/system_profiler",
+            arguments: ["SPConfigurationProfileDataType", "-json"]
+        ),
+        let data = output.data(using: .utf8),
+        let json = try? JSONSerialization.jsonObject(with: data)
+        else {
+            return false
+        }
+        
+        return containsPrivateDataLoggingPayload(in: json)
+    }
+    
+    private func runCommand(executablePath: String, arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+        
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+        
+        do {
+            try process.run()
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+        catch {
+            print("[LogPrivacyProfileDetector] \(error)")
+            return nil
+        }
+    }
+    
+    private func containsPrivateDataLoggingPayload(in value: Any) -> Bool {
+        if let dictionary = value as? [String: Any] {
+            if let payloadName = dictionary["_name"] as? String,
+               payloadName == "com.apple.system.logging",
+               let payloadData = dictionary["spconfigprofile_payload_data"] as? String,
+               payloadData.contains("Enable-Private-Data"),
+               payloadData.contains("= 1") {
+                return true
+            }
+            
+            return dictionary.values.contains(where: containsPrivateDataLoggingPayload(in:))
+        }
+        
+        if let array = value as? [Any] {
+            return array.contains(where: containsPrivateDataLoggingPayload(in:))
+        }
+        
+        return false
+    }
 }
 
 final class MusicTrackSnapshotReader {

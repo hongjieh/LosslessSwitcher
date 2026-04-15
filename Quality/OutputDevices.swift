@@ -21,6 +21,7 @@ class OutputDevices: ObservableObject {
     
     private let coreAudio = SimplyCoreAudio()
     private let logReader = LogReader()
+    private let logPrivacyProfileDetector = LogPrivacyProfileDetector()
     private let snapshotReader = MusicTrackSnapshotReader()
     private let localFileFormatResolver = LocalFileFormatResolver()
     
@@ -38,6 +39,7 @@ class OutputDevices: ObservableObject {
     private var recentEntries = [CMEntry]()
     private var latestNamedEntries = [String: CMEntry]()
     private var currentSession: PlaybackSession?
+    private var logMatchingMode = LogMatchingMode.fallback
     private var isSwitchingFormat = false
     private var needsReapplyAfterSwitch = false
     private let maxSwitchVerificationRetries = 2
@@ -52,6 +54,7 @@ class OutputDevices: ObservableObject {
         self.defaultOutputDevice = self.coreAudio.defaultOutputDevice
         self.getDeviceSampleRate()
         self.logReader.spawnProcessIfNeeded()
+        detectLogMatchingMode()
         bootstrapRecentEntries()
         bootstrapCurrentPlaybackSession()
         
@@ -200,6 +203,24 @@ class OutputDevices: ObservableObject {
                 self.recentEntries = sortedEntries
                 if let latestDate = sortedEntries.last?.date {
                     self.pruneRecentEntries(referenceDate: latestDate)
+                }
+                self.matchCurrentSessionFromBufferedEntries()
+            }
+        }
+    }
+    
+    private func detectLogMatchingMode() {
+        bootstrapQueue.async { [weak self] in
+            guard let self else { return }
+            let matchingMode = self.logPrivacyProfileDetector.detectMatchingMode()
+            
+            self.pairHandlingQueue.async { [weak self] in
+                guard let self else { return }
+                self.logMatchingMode = matchingMode
+                NSLog("[LogMatchMode] %@", matchingMode.rawValue)
+                
+                if let session = self.currentSession {
+                    self.primeHistoryForSession(sessionID: session.id, historyLookback: 3600)
                 }
                 self.matchCurrentSessionFromBufferedEntries()
             }
@@ -397,6 +418,55 @@ class OutputDevices: ObservableObject {
     }
     
     private func bestLogEntry(for session: PlaybackSession, entries: [CMEntry]) -> CMEntry? {
+        switch logMatchingMode {
+        case .profileBacked:
+            return bestProfileBackedLogEntry(for: session, entries: entries)
+        case .fallback:
+            return bestFallbackLogEntry(for: session, entries: entries)
+        }
+    }
+    
+    private func bestProfileBackedLogEntry(for session: PlaybackSession, entries: [CMEntry]) -> CMEntry? {
+        let targetTitle = normalizedTrackField(session.track.title ?? session.snapshot?.name)
+        guard let targetTitle else {
+            return bestFallbackLogEntry(for: session, entries: entries)
+        }
+        
+        let titledMatches = entries.filter { normalizedTrackField($0.trackName) == targetTitle }
+        guard !titledMatches.isEmpty else { return nil }
+        
+        let aroundActivation = titledMatches.filter {
+            $0.date >= session.startedAt.addingTimeInterval(-300)
+                && $0.date <= session.startedAt.addingTimeInterval(180)
+        }
+        if let best = aroundActivation.min(by: {
+            titledMatchDistance(for: $0, anchor: session.startedAt)
+                < titledMatchDistance(for: $1, anchor: session.startedAt)
+        }) {
+            return best
+        }
+        
+        if let cachedMatch = latestNamedEntries[targetTitle],
+           abs(cachedMatch.date.timeIntervalSince(session.startedAt)) <= 300 {
+            return cachedMatch
+        }
+        
+        if let bestHistoricalMatch = titledMatches
+            .filter({ $0.date < session.startedAt && session.startedAt.timeIntervalSince($0.date) <= 300 })
+            .max(by: { $0.date < $1.date }) {
+            return bestHistoricalMatch
+        }
+        
+        if let nextTitledMatch = titledMatches
+            .filter({ $0.date >= session.startedAt && $0.date.timeIntervalSince(session.startedAt) <= 180 })
+            .min(by: { $0.date < $1.date }) {
+            return nextTitledMatch
+        }
+        
+        return nil
+    }
+    
+    private func bestFallbackLogEntry(for session: PlaybackSession, entries: [CMEntry]) -> CMEntry? {
         let windowStart = session.startedAt.addingTimeInterval(-5.0)
         let windowEnd = session.startedAt.addingTimeInterval(15.0)
         let candidates = entries.filter { $0.date >= windowStart && $0.date <= windowEnd }
