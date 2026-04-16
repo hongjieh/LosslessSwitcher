@@ -28,6 +28,7 @@ struct QualityApp: App {
             else {
                 SampleRateLabel()
                     .environmentObject(controller.outputDevices)
+                    .environmentObject(defaults)
             }
         }
         .menuBarExtraStyle(.menu)

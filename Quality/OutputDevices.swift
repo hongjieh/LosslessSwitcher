@@ -17,6 +17,7 @@ class OutputDevices: ObservableObject {
     @Published var outputDevices = [AudioDevice]()
     @Published var currentSampleRate: Float64?
     @Published var currentBitDepth: Int?
+    @Published var sourceFormat: AudioFormat?
     @Published var enableBitDepthDetection = Defaults.shared.userPreferBitDepthDetection
     
     private let coreAudio = SimplyCoreAudio()
@@ -30,6 +31,7 @@ class OutputDevices: ObservableObject {
     private let processQueue = DispatchQueue(label: "processQueue", qos: .userInitiated)
     
     private var enableBitDepthDetectionCancellable: AnyCancellable?
+    private var statusBarDisplayModeCancellable: AnyCancellable?
     private var changesCancellable: AnyCancellable?
     private var defaultChangesCancellable: AnyCancellable?
     private var outputSelectionCancellable: AnyCancellable?
@@ -97,6 +99,10 @@ class OutputDevices: ObservableObject {
             self.enableBitDepthDetection = newValue
             self.scheduleReapplyCurrentSessionFormat()
         }
+        
+        statusBarDisplayModeCancellable = Defaults.shared.$statusBarDisplayMode.sink { [weak self] _ in
+            self?.refreshStatusItemTitle()
+        }
     }
     
     deinit {
@@ -104,6 +110,7 @@ class OutputDevices: ObservableObject {
         defaultChangesCancellable?.cancel()
         outputSelectionCancellable?.cancel()
         enableBitDepthDetectionCancellable?.cancel()
+        statusBarDisplayModeCancellable?.cancel()
         entryStreamReceiver?.cancel()
         activationStreamReceiver?.cancel()
         logReader.stop()
@@ -329,6 +336,7 @@ class OutputDevices: ObservableObject {
         
         previousTrack = currentTrack
         currentTrack = track
+        updateSourceFormat(nil)
         
         let session = PlaybackSession(
             id: UUID(),
@@ -556,6 +564,7 @@ class OutputDevices: ObservableObject {
         session.appliedSource = source
         session.switchRetryCount = 0
         currentSession = session
+        updateSourceFormat(format)
         
         NSLog("[Apply] source=%@ rate=%d bits=%d", source.rawValue, format.sampleRate, format.bitDepth ?? -1)
         print("[Resolution] \(source.rawValue) -> \(format.sampleRate) / \(String(describing: format.bitDepth))")
@@ -895,22 +904,28 @@ class OutputDevices: ObservableObject {
             let readableSampleRate = sampleRate / 1000
             self.currentSampleRate = readableSampleRate
             self.currentBitDepth = bitDepth
-            
-            let delegate = AppDelegate.instance
-            if enableBitDepthDetection {
-                if let bitDepth {
-                    delegate?.statusItemTitle = String(format: "%.1f kHz / %d bit", readableSampleRate, bitDepth)
-                }
-                else {
-                    delegate?.statusItemTitle = String(format: "%.1f kHz / ? bit", readableSampleRate)
-                }
-            }
-            else {
-                delegate?.statusItemTitle = String(format: "%.1f kHz", readableSampleRate)
-            }
+            self.refreshStatusItemTitle()
         }
         
         self.runUserScript(sampleRate, bitDepth: bitDepth)
+    }
+    
+    func statusBarText(for mode: StatusBarDisplayMode) -> String {
+        switch mode {
+        case .sourceAndOutput:
+            let sourceText = sourceFormat
+                .map { "Source \(compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth))" }
+                ?? "Source Unknown"
+            let outputText = "Output \(compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth))"
+            return "\(sourceText) -> \(outputText)"
+        case .sourceOnly:
+            if let sourceFormat {
+                return "Source \(compactFormatText(sampleRate: sourceFormat.sampleRate, bitDepth: sourceFormat.bitDepth))"
+            }
+            return "Source Unknown"
+        case .outputOnly:
+            return "Output \(compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth))"
+        }
     }
     
     func runUserScript(_ sampleRate: Float64, bitDepth: Int?) {
@@ -953,5 +968,37 @@ class OutputDevices: ObservableObject {
     private static func historyLookbackSeconds(from snapshot: MusicTrackSnapshot) -> Int {
         let elapsed = max(snapshot.playerPosition ?? 0, 0)
         return min(max(Int(elapsed.rounded(.up)) + 45, 180), 3600)
+    }
+    
+    private func updateSourceFormat(_ format: AudioFormat?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.sourceFormat = format
+            self.refreshStatusItemTitle()
+        }
+    }
+    
+    private func refreshStatusItemTitle() {
+        AppDelegate.instance?.statusItemTitle = statusBarText(for: Defaults.shared.statusBarDisplayMode)
+    }
+    
+    private func compactFormatText(sampleRate: Int, bitDepth: Int?) -> String {
+        compactFormatText(sampleRateKHz: Float64(sampleRate) / 1000, bitDepth: bitDepth)
+    }
+    
+    private func compactFormatText(sampleRateKHz: Float64?, bitDepth: Int?) -> String {
+        guard let sampleRateKHz else { return "Unknown" }
+        let sampleRateText = compactSampleRateText(sampleRateKHz)
+        if let bitDepth {
+            return "\(sampleRateText)/\(bitDepth)"
+        }
+        return "\(sampleRateText)/?"
+    }
+    
+    private func compactSampleRateText(_ sampleRateKHz: Float64) -> String {
+        if sampleRatesEqual(sampleRateKHz, sampleRateKHz.rounded()) {
+            return String(Int(sampleRateKHz.rounded()))
+        }
+        return String(format: "%.1f", sampleRateKHz)
     }
 }

@@ -48,6 +48,23 @@ struct MenuView: View {
             }
             
             Menu {
+                ForEach(StatusBarDisplayMode.allCases) { mode in
+                    Button {
+                        defaults.statusBarDisplayMode = mode
+                    } label: {
+                        HStack {
+                            Text(mode.menuTitle)
+                            if defaults.statusBarDisplayMode == mode {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Text("Menu Bar Display")
+            }
+            
+            Menu {
                 Button {
                     outputDevices.selectedOutputDevice = nil
                     defaults.selectedDeviceUID = nil

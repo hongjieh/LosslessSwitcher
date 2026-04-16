@@ -9,19 +9,8 @@ import SwiftUI
 
 struct SampleRateLabel: View {
     @EnvironmentObject private var outputDevices: OutputDevices
+    @EnvironmentObject private var defaults: Defaults
     var body: some View {
-        if let currentSampleRate = outputDevices.currentSampleRate {
-            if outputDevices.enableBitDepthDetection {
-                if let bitDepth = outputDevices.currentBitDepth {
-                    Text(String(format: "%.1f kHz / %d bit", currentSampleRate, bitDepth))
-                } else {
-                    Text(String(format: "%.1f kHz / ? bit", currentSampleRate))
-                }
-            } else {
-                Text(String(format: "%.1f kHz", currentSampleRate))
-            }
-        } else {
-            Text("Unknown")
-        }
+        Text(outputDevices.statusBarText(for: defaults.statusBarDisplayMode))
     }
 }
