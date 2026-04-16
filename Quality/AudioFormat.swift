@@ -10,4 +10,5 @@ import Foundation
 struct AudioFormat: Equatable {
     let sampleRate: Int
     let bitDepth: Int?
+    let bitRate: Int?
 }

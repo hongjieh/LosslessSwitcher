@@ -267,7 +267,7 @@ class OutputDevices: ObservableObject {
                     resolveSnapshot: false
                 )
                 
-                if let directFormat = self.localFileFormatResolver.resolveLosslessFormat(for: snapshot),
+                if let directFormat = self.localFileFormatResolver.resolveFormat(for: snapshot),
                    let sessionID = self.currentSession?.id {
                     self.apply(format: directFormat, from: .localFile, to: sessionID)
                 }
@@ -408,7 +408,7 @@ class OutputDevices: ObservableObject {
                 self.currentSession = session
                 
                 if let snapshot,
-                   let directFormat = self.localFileFormatResolver.resolveLosslessFormat(for: snapshot) {
+                   let directFormat = self.localFileFormatResolver.resolveFormat(for: snapshot) {
                     self.apply(format: directFormat, from: .localFile, to: sessionID)
                     return
                 }
@@ -434,7 +434,7 @@ class OutputDevices: ObservableObject {
                 }
                 
                 NSLog("[History] match title=%@ rate=%d bits=%d", entry.trackName ?? "nil", entry.sampleRate, entry.bitDepth ?? -1)
-                let format = AudioFormat(sampleRate: entry.sampleRate, bitDepth: entry.bitDepth)
+                let format = AudioFormat(sampleRate: entry.sampleRate, bitDepth: entry.bitDepth, bitRate: nil)
                 self.apply(format: format, from: .logStream, to: sessionID)
             }
         }
@@ -445,7 +445,7 @@ class OutputDevices: ObservableObject {
         guard session.appliedSource != .localFile else { return }
         guard let entry = bestLogEntry(for: session, entries: recentEntries) else { return }
         
-        let format = AudioFormat(sampleRate: entry.sampleRate, bitDepth: entry.bitDepth)
+        let format = AudioFormat(sampleRate: entry.sampleRate, bitDepth: entry.bitDepth, bitRate: nil)
         apply(format: format, from: .logStream, to: session.id)
     }
     
@@ -644,7 +644,8 @@ class OutputDevices: ObservableObject {
                 sessionID: currentSession?.id,
                 expectedFormat: AudioFormat(
                     sampleRate: Int(chosenPhysicalFormat.mSampleRate.rounded()),
-                    bitDepth: Int(chosenPhysicalFormat.mBitsPerChannel)
+                    bitDepth: Int(chosenPhysicalFormat.mBitsPerChannel),
+                    bitRate: nil
                 ),
                 fallbackSampleRate: chosenPhysicalFormat.mSampleRate,
                 fallbackBitDepth: Int(chosenPhysicalFormat.mBitsPerChannel)
@@ -674,7 +675,8 @@ class OutputDevices: ObservableObject {
                 sessionID: currentSession?.id,
                 expectedFormat: AudioFormat(
                     sampleRate: Int(chosenSampleRate.rounded()),
-                    bitDepth: format.bitDepth
+                    bitDepth: format.bitDepth,
+                    bitRate: format.bitRate
                 ),
                 fallbackSampleRate: chosenSampleRate,
                 fallbackBitDepth: resolvedBitDepth
@@ -926,7 +928,7 @@ class OutputDevices: ObservableObject {
         switch mode {
         case .sourceAndOutput:
             let sourceText = sourceFormat
-                .map { compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth) }
+                .map { compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth, bitRate: $0.bitRate) }
                 ?? "Unknown"
             let outputText = compactOutputFormatText(
                 sampleRateKHz: currentSampleRate,
@@ -936,7 +938,11 @@ class OutputDevices: ObservableObject {
             return "\(sourceText) -> \(outputText)"
         case .sourceOnly:
             if let sourceFormat {
-                return compactFormatText(sampleRate: sourceFormat.sampleRate, bitDepth: sourceFormat.bitDepth)
+                return compactFormatText(
+                    sampleRate: sourceFormat.sampleRate,
+                    bitDepth: sourceFormat.bitDepth,
+                    bitRate: sourceFormat.bitRate
+                )
             }
             return "Unknown"
         case .outputOnly:
@@ -1002,15 +1008,18 @@ class OutputDevices: ObservableObject {
         AppDelegate.instance?.statusItemTitle = statusBarText(for: Defaults.shared.statusBarDisplayMode)
     }
     
-    private func compactFormatText(sampleRate: Int, bitDepth: Int?) -> String {
-        compactFormatText(sampleRateKHz: Float64(sampleRate) / 1000, bitDepth: bitDepth)
+    private func compactFormatText(sampleRate: Int, bitDepth: Int?, bitRate: Int?) -> String {
+        compactFormatText(sampleRateKHz: Float64(sampleRate) / 1000, bitDepth: bitDepth, bitRate: bitRate)
     }
     
-    private func compactFormatText(sampleRateKHz: Float64?, bitDepth: Int?) -> String {
+    private func compactFormatText(sampleRateKHz: Float64?, bitDepth: Int?, bitRate: Int?) -> String {
         guard let sampleRateKHz else { return "Unknown" }
         let sampleRateText = compactSampleRateText(sampleRateKHz)
         if let bitDepth {
             return "\(sampleRateText) kHz/\(bitDepth) bit"
+        }
+        if let bitRate {
+            return "\(sampleRateText) kHz/\(bitRate) kbps"
         }
         return "\(sampleRateText) kHz/? bit"
     }
@@ -1028,7 +1037,7 @@ class OutputDevices: ObservableObject {
     }
     
     private func compactSampleRateText(_ sampleRateKHz: Float64) -> String {
-        if sampleRatesEqual(sampleRateKHz, sampleRateKHz.rounded()) {
+        if abs(sampleRateKHz - sampleRateKHz.rounded()) < 0.001 {
             return String(Int(sampleRateKHz.rounded()))
         }
         return String(format: "%.1f", sampleRateKHz)

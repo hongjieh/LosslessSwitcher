@@ -245,19 +245,38 @@ final class MusicTrackSnapshotReader {
 }
 
 final class LocalFileFormatResolver {
-    func resolveLosslessFormat(for snapshot: MusicTrackSnapshot) -> AudioFormat? {
-        guard snapshot.isLikelyLosslessLocalTrack, let locationPath = snapshot.locationPath else { return nil }
+    func resolveFormat(for snapshot: MusicTrackSnapshot) -> AudioFormat? {
+        guard snapshot.isLocalFileTrack else { return nil }
+        
+        if !snapshot.isLikelyLosslessLocalTrack {
+            guard let sampleRate = snapshot.sampleRate else { return nil }
+            return AudioFormat(
+                sampleRate: sampleRate,
+                bitDepth: nil,
+                bitRate: snapshot.bitRate
+            )
+        }
+        
+        guard let locationPath = snapshot.locationPath else { return nil }
         
         do {
             let metadata = try readDataFormat(at: locationPath)
             let resolvedSampleRate = Int(metadata.sampleRate.rounded())
             let resolvedBitDepth = metadata.bitDepth > 0 ? Int(metadata.bitDepth) : nil
-            return AudioFormat(sampleRate: resolvedSampleRate, bitDepth: resolvedBitDepth)
+            return AudioFormat(
+                sampleRate: resolvedSampleRate,
+                bitDepth: resolvedBitDepth,
+                bitRate: snapshot.bitRate
+            )
         }
         catch {
             print("[LocalFileFormatResolver] \(error)")
             guard let sampleRate = snapshot.sampleRate else { return nil }
-            return AudioFormat(sampleRate: sampleRate, bitDepth: nil)
+            return AudioFormat(
+                sampleRate: sampleRate,
+                bitDepth: nil,
+                bitRate: snapshot.bitRate
+            )
         }
     }
     
