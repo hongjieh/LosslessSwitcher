@@ -17,6 +17,7 @@ class OutputDevices: ObservableObject {
     @Published var outputDevices = [AudioDevice]()
     @Published var currentSampleRate: Float64?
     @Published var currentBitDepth: Int?
+    @Published var currentOutputIsFloat: Bool?
     @Published var sourceFormat: AudioFormat?
     @Published var enableBitDepthDetection = Defaults.shared.userPreferBitDepthDetection
     
@@ -119,7 +120,10 @@ class OutputDevices: ObservableObject {
     func getDeviceSampleRate() {
         let defaultDevice = activeDevice()
         guard let sampleRate = defaultDevice?.nominalSampleRate else { return }
-        self.updateSampleRate(sampleRate, bitDepth: nil)
+        let isFloat = defaultDevice
+            .flatMap { currentPhysicalFormat(for: $0) }
+            .map(isFloatFormat)
+        self.updateSampleRate(sampleRate, bitDepth: nil, isFloat: isFloat)
     }
     
     func trackDidChange(_ newTrack: TrackInfo) {
@@ -792,7 +796,7 @@ class OutputDevices: ObservableObject {
                 deviceUID.flatMap { AudioDevice.lookup(by: $0) }
                 ?? self.activeDevice()
             
-            let observedState: (sampleRate: Float64, bitDepth: Int?)
+            let observedState: (sampleRate: Float64, bitDepth: Int?, isFloat: Bool?)
             if let observedDevice {
                 observedState = self.observedDeviceState(
                     observedDevice,
@@ -801,15 +805,17 @@ class OutputDevices: ObservableObject {
                 )
                 self.updateSampleRate(
                     observedState.sampleRate,
-                    bitDepth: observedState.bitDepth
+                    bitDepth: observedState.bitDepth,
+                    isFloat: observedState.isFloat
                 )
             }
             else {
                 observedState = (
                     sampleRate: fallbackSampleRate,
-                    bitDepth: fallbackBitDepth
+                    bitDepth: fallbackBitDepth,
+                    isFloat: nil
                 )
-                self.updateSampleRate(fallbackSampleRate, bitDepth: fallbackBitDepth)
+                self.updateSampleRate(fallbackSampleRate, bitDepth: fallbackBitDepth, isFloat: nil)
             }
             
             self.isSwitchingFormat = false
@@ -873,13 +879,14 @@ class OutputDevices: ObservableObject {
         _ device: AudioDevice,
         fallbackSampleRate: Float64,
         fallbackBitDepth: Int?
-    ) -> (sampleRate: Float64, bitDepth: Int?) {
+    ) -> (sampleRate: Float64, bitDepth: Int?, isFloat: Bool?) {
         let observedPhysicalFormat = currentPhysicalFormat(for: device)
         return (
             sampleRate: device.nominalSampleRate
                 ?? observedPhysicalFormat?.mSampleRate
                 ?? fallbackSampleRate,
-            bitDepth: observedPhysicalFormat.map { Int($0.mBitsPerChannel) } ?? fallbackBitDepth
+            bitDepth: observedPhysicalFormat.map { Int($0.mBitsPerChannel) } ?? fallbackBitDepth,
+            isFloat: observedPhysicalFormat.map(isFloatFormat)
         )
     }
 
@@ -893,10 +900,14 @@ class OutputDevices: ObservableObject {
             fallbackSampleRate: fallbackSampleRate,
             fallbackBitDepth: fallbackBitDepth
         )
-        updateSampleRate(observedState.sampleRate, bitDepth: observedState.bitDepth)
+        updateSampleRate(
+            observedState.sampleRate,
+            bitDepth: observedState.bitDepth,
+            isFloat: observedState.isFloat
+        )
     }
     
-    func updateSampleRate(_ sampleRate: Float64, bitDepth: Int?) {
+    func updateSampleRate(_ sampleRate: Float64, bitDepth: Int?, isFloat: Bool?) {
         self.previousSampleRate = sampleRate
         self.previousBitDepth = bitDepth
         
@@ -904,6 +915,7 @@ class OutputDevices: ObservableObject {
             let readableSampleRate = sampleRate / 1000
             self.currentSampleRate = readableSampleRate
             self.currentBitDepth = bitDepth
+            self.currentOutputIsFloat = isFloat
             self.refreshStatusItemTitle()
         }
         
@@ -916,7 +928,11 @@ class OutputDevices: ObservableObject {
             let sourceText = sourceFormat
                 .map { compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth) }
                 ?? "Unknown"
-            let outputText = compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth)
+            let outputText = compactOutputFormatText(
+                sampleRateKHz: currentSampleRate,
+                bitDepth: currentBitDepth,
+                isFloat: currentOutputIsFloat
+            )
             return "\(sourceText) -> \(outputText)"
         case .sourceOnly:
             if let sourceFormat {
@@ -924,7 +940,11 @@ class OutputDevices: ObservableObject {
             }
             return "Unknown"
         case .outputOnly:
-            return compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth)
+            return compactOutputFormatText(
+                sampleRateKHz: currentSampleRate,
+                bitDepth: currentBitDepth,
+                isFloat: currentOutputIsFloat
+            )
         }
     }
     
@@ -995,10 +1015,26 @@ class OutputDevices: ObservableObject {
         return "\(sampleRateText) kHz/? bit"
     }
     
+    private func compactOutputFormatText(sampleRateKHz: Float64?, bitDepth: Int?, isFloat: Bool?) -> String {
+        guard let sampleRateKHz else { return "Unknown" }
+        let sampleRateText = compactSampleRateText(sampleRateKHz)
+        if isFloat == true {
+            return "\(sampleRateText) kHz/float"
+        }
+        if let bitDepth {
+            return "\(sampleRateText) kHz/\(bitDepth) bit"
+        }
+        return "\(sampleRateText) kHz/?"
+    }
+    
     private func compactSampleRateText(_ sampleRateKHz: Float64) -> String {
         if sampleRatesEqual(sampleRateKHz, sampleRateKHz.rounded()) {
             return String(Int(sampleRateKHz.rounded()))
         }
         return String(format: "%.1f", sampleRateKHz)
+    }
+    
+    private func isFloatFormat(_ format: AudioStreamBasicDescription) -> Bool {
+        (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
     }
 }
