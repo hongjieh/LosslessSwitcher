@@ -914,17 +914,17 @@ class OutputDevices: ObservableObject {
         switch mode {
         case .sourceAndOutput:
             let sourceText = sourceFormat
-                .map { "Source \(compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth))" }
-                ?? "Source Unknown"
-            let outputText = "Output \(compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth))"
+                .map { compactFormatText(sampleRate: $0.sampleRate, bitDepth: $0.bitDepth) }
+                ?? "Unknown"
+            let outputText = compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth)
             return "\(sourceText) -> \(outputText)"
         case .sourceOnly:
             if let sourceFormat {
-                return "Source \(compactFormatText(sampleRate: sourceFormat.sampleRate, bitDepth: sourceFormat.bitDepth))"
+                return compactFormatText(sampleRate: sourceFormat.sampleRate, bitDepth: sourceFormat.bitDepth)
             }
-            return "Source Unknown"
+            return "Unknown"
         case .outputOnly:
-            return "Output \(compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth))"
+            return compactFormatText(sampleRateKHz: currentSampleRate, bitDepth: currentBitDepth)
         }
     }
     
@@ -990,9 +990,9 @@ class OutputDevices: ObservableObject {
         guard let sampleRateKHz else { return "Unknown" }
         let sampleRateText = compactSampleRateText(sampleRateKHz)
         if let bitDepth {
-            return "\(sampleRateText)/\(bitDepth)"
+            return "\(sampleRateText) kHz/\(bitDepth) bit"
         }
-        return "\(sampleRateText)/?"
+        return "\(sampleRateText) kHz/? bit"
     }
     
     private func compactSampleRateText(_ sampleRateKHz: Float64) -> String {
